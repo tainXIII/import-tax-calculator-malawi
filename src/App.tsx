@@ -2,10 +2,8 @@ import { useState, useEffect } from "react";
 import {
   Calculator,
   DollarSign,
-  TrendingUp,
   History,
   Download,
-  Info,
   RefreshCw,
   Car,
   Package,
@@ -657,7 +655,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                     Bulk Import Calculator
                   </h2>
                   <div className="space-y-3 mb-4">
-                    {bulkItems.map((item, index) => (
+                    {bulkItems.map((item) => (
                       <div key={item.id} className="flex gap-3 items-center">
                         <input
                           type="text"
