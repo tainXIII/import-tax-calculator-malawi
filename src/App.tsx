@@ -13,9 +13,13 @@ import {
   BarChart3,
   MapPin,
 } from "lucide-react";
+import { productCategories } from "./data/taxCategories";
 
 interface CalculationResult {
   valueMWK: number;
+  importDuty?: number;
+  exciseTax?: number;
+  surcharge?: number;
   vat: number;
   ait: number;
   dif: number;
@@ -27,9 +31,11 @@ interface CalculationResult {
   timestamp: Date;
   type: "general" | "car";
   details?: CarImportDetails;
+  categoryName?: string;
 }
 
 interface CarImportDetails {
+  vehicleType: string;
   engineSize: number;
   vehicleAge: number;
   isSADC: boolean;
@@ -88,15 +94,19 @@ export default function App() {
   });
 
   // Car-specific inputs
+  const [vehicleType, setVehicleType] = useState<string>("Internal Combustion");
   const [engineSize, setEngineSize] = useState<string>("");
   const [vehicleAge, setVehicleAge] = useState<string>("");
   const [isSADC, setIsSADC] = useState<boolean>(false);
   const [countryOfOrigin, setCountryOfOrigin] = useState<string>("");
 
+  // General category
+  const [generalCategory, setGeneralCategory] = useState<string>("gen");
+
   // Bulk calculator
   const [bulkItems, setBulkItems] = useState<
-    Array<{ id: number; name: string; usdPrice: number }>
-  >([{ id: 1, name: "", usdPrice: 0 }]);
+    Array<{ id: number; name: string; usdPrice: number; categoryId: string }>
+  >([{ id: 1, name: "", usdPrice: 0, categoryId: "gen" }]);
 
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -188,16 +198,26 @@ export default function App() {
     }
 
     const valueMWK = usdValue * rate;
-    const vat = valueMWK * (taxRates.vat / 100);
+    const category = productCategories.find(c => c.id === generalCategory) || productCategories[0];
+
+    const importDuty = valueMWK * (category.importDuty / 100);
+    const exciseTax = valueMWK * (category.exciseTax / 100);
+    const surcharge = valueMWK * (category.surcharge / 100);
+    const taxableAmount = valueMWK + importDuty + exciseTax + surcharge;
+    
+    const vat = taxableAmount * (category.vat / 100);
     const ait = valueMWK * (taxRates.ait / 100);
     const dif = taxRates.dif;
     const extra = taxRates.extra;
 
-    const totalTaxes = vat + ait + dif + extra;
+    const totalTaxes = importDuty + exciseTax + surcharge + vat + ait + dif + extra;
     const landedCost = valueMWK + totalTaxes;
 
     const newResult: CalculationResult = {
       valueMWK,
+      importDuty,
+      exciseTax,
+      surcharge,
       vat,
       ait,
       dif,
@@ -208,6 +228,7 @@ export default function App() {
       rate,
       timestamp: new Date(),
       type: "general",
+      categoryName: category.name
     };
 
     setResult(newResult);
@@ -216,56 +237,62 @@ export default function App() {
   };
 
   const calculateCar = () => {
-    if (!usdPrice || !rate || !engineSize || !vehicleAge) {
+    if (!usdPrice || !rate || (vehicleType !== "Electric" && !engineSize) || !vehicleAge) {
       setError("Please fill in all car import fields");
       return;
     }
 
     const usdValue = parseFloat(usdPrice);
-    const engine = parseFloat(engineSize);
+    const engine = vehicleType === "Electric" ? 0 : parseFloat(engineSize);
     const age = parseInt(vehicleAge);
 
-    if (usdValue <= 0 || engine <= 0 || age < 0) {
+    if (usdValue <= 0 || (vehicleType !== "Electric" && engine <= 0) || age < 0) {
       setError("Please enter valid values for all fields");
       return;
     }
 
     const valueMWK = usdValue * rate;
 
-    // Determine duty rate based on SADC status and engine size
-    let dutyRate: number;
-    if (isSADC) {
-      dutyRate =
-        engine <= 1000
-          ? carDutyRates.sadcUnder1000cc
-          : carDutyRates.sadcOver1000cc;
+    // Determine duty and excise rates based on vehicle type
+    let dutyRate: number = 0;
+    let exciseRate: number = 0;
+    let customVatRate: number = taxRates.vat;
+    let carbonTax: number = 0;
+
+    if (vehicleType === "Electric") {
+      dutyRate = 0;
+      exciseRate = 0;
+      customVatRate = 8;
+      carbonTax = 0;
+    } else if (vehicleType.startsWith("Hybrid")) {
+      dutyRate = 30; // Standard customs duty for hybrids
+      exciseRate = engine <= 1500 ? 17.5 : engine <= 2500 ? 10 : 20;
+      carbonTax = engine * carDutyRates.carbonTaxRate * (age > 10 ? 1.5 : 1);
+      const agePenalty = age > 5 ? Math.min((age - 5) * 2, 15) : 0;
+      dutyRate += agePenalty;
     } else {
-      dutyRate =
-        engine <= 1000
-          ? carDutyRates.nonSadcUnder1000cc
-          : carDutyRates.nonSadcOver1000cc;
+      dutyRate = isSADC
+        ? engine <= 1000
+          ? carDutyRates.sadcUnder1000cc
+          : carDutyRates.sadcOver1000cc
+        : engine <= 1000
+        ? carDutyRates.nonSadcUnder1000cc
+        : carDutyRates.nonSadcOver1000cc;
+      exciseRate =
+        engine <= 1500
+          ? carDutyRates.exciseUnder1500cc
+          : carDutyRates.exciseOver1500cc;
+      carbonTax = engine * carDutyRates.carbonTaxRate * (age > 10 ? 1.5 : 1);
+      const agePenalty = age > 5 ? Math.min((age - 5) * 2, 15) : 0;
+      dutyRate += agePenalty;
     }
 
-    // Age penalty (additional duty for older vehicles)
-    const agePenalty = age > 5 ? Math.min((age - 5) * 2, 15) : 0;
-    dutyRate += agePenalty;
-
     const importDuty = valueMWK * (dutyRate / 100);
-
-    // Excise tax based on engine size
-    const exciseRate =
-      engine <= 1500
-        ? carDutyRates.exciseUnder1500cc
-        : carDutyRates.exciseOver1500cc;
     const exciseTax = valueMWK * (exciseRate / 100);
-
-    // Carbon tax (based on engine size and age)
-    const carbonTax =
-      engine * carDutyRates.carbonTaxRate * (age > 10 ? 1.5 : 1);
 
     // VAT on (value + duty + excise)
     const taxableAmount = valueMWK + importDuty + exciseTax;
-    const vat = taxableAmount * (taxRates.vat / 100);
+    const vat = taxableAmount * (customVatRate / 100);
 
     // AIT
     const ait = valueMWK * (taxRates.ait / 100);
@@ -289,6 +316,7 @@ export default function App() {
     const landedCost = valueMWK + totalTaxes;
 
     const carDetails: CarImportDetails = {
+      vehicleType,
       engineSize: engine,
       vehicleAge: age,
       isSADC,
@@ -332,21 +360,43 @@ export default function App() {
       return;
     }
 
-    const totalUSD = validItems.reduce((sum, item) => sum + item.usdPrice, 0);
-    const totalMWK = totalUSD * rate;
+    let totalImportDuty = 0, totalExcise = 0, totalSurcharge = 0, totalVat = 0, totalAit = 0;
+    let totalMWK = 0, totalUSD = 0;
 
-    const vat = totalMWK * (taxRates.vat / 100);
-    const ait = totalMWK * (taxRates.ait / 100);
-    const dif = taxRates.dif * validItems.length; // DIF per item
+    validItems.forEach(item => {
+      const valueUSD = item.usdPrice;
+      const valueMWK = valueUSD * rate;
+      const cat = productCategories.find(c => c.id === item.categoryId) || productCategories[0];
+      
+      const itemImportDuty = valueMWK * (cat.importDuty / 100);
+      const itemExcise = valueMWK * (cat.exciseTax / 100);
+      const itemSurcharge = valueMWK * (cat.surcharge / 100);
+      const itemTaxableAmount = valueMWK + itemImportDuty + itemExcise + itemSurcharge;
+      const itemVat = itemTaxableAmount * (cat.vat / 100);
+      const itemAit = valueMWK * (taxRates.ait / 100);
+
+      totalUSD += valueUSD;
+      totalMWK += valueMWK;
+      totalImportDuty += itemImportDuty;
+      totalExcise += itemExcise;
+      totalSurcharge += itemSurcharge;
+      totalVat += itemVat;
+      totalAit += itemAit;
+    });
+
+    const dif = taxRates.dif * validItems.length;
     const extra = taxRates.extra;
 
-    const totalTaxes = vat + ait + dif + extra;
+    const totalTaxes = totalImportDuty + totalExcise + totalSurcharge + totalVat + totalAit + dif + extra;
     const landedCost = totalMWK + totalTaxes;
 
     const newResult: CalculationResult = {
       valueMWK: totalMWK,
-      vat,
-      ait,
+      importDuty: totalImportDuty,
+      exciseTax: totalExcise,
+      surcharge: totalSurcharge,
+      vat: totalVat,
+      ait: totalAit,
       dif,
       extra,
       totalTaxes,
@@ -355,6 +405,7 @@ export default function App() {
       rate,
       timestamp: new Date(),
       type: "general",
+      categoryName: "Bulk Items"
     };
 
     setResult(newResult);
@@ -417,7 +468,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
   };
 
   const addBulkItem = () => {
-    setBulkItems([...bulkItems, { id: Date.now(), name: "", usdPrice: 0 }]);
+    setBulkItems([...bulkItems, { id: Date.now(), name: "", usdPrice: 0, categoryId: "gen" }]);
   };
 
   const removeBulkItem = (id: number) => {
@@ -426,7 +477,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
 
   const updateBulkItem = (
     id: number,
-    field: "name" | "usdPrice",
+    field: "name" | "usdPrice" | "categoryId",
     value: string | number
   ) => {
     setBulkItems(
@@ -549,6 +600,17 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                     General Import Calculator
                   </h2>
                   <div className="space-y-4">
+                    <select
+                      value={generalCategory}
+                      onChange={(e) => setGeneralCategory(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
+                    >
+                      {productCategories.map((cat) => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
                     <div className="relative">
                       <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                       <input
@@ -589,13 +651,25 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                         step="0.01"
                       />
                     </div>
-                    <input
-                      type="number"
-                      placeholder="Engine size (cc)"
-                      value={engineSize}
-                      onChange={(e) => setEngineSize(e.target.value)}
+                    <select
+                      value={vehicleType}
+                      onChange={(e) => setVehicleType(e.target.value)}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
-                    />
+                    >
+                      <option value="Internal Combustion">Internal Combustion (Petrol/Diesel)</option>
+                      <option value="Hybrid (Petrol/Electric)">Hybrid (Petrol/Electric)</option>
+                      <option value="Hybrid (Diesel/Electric)">Hybrid (Diesel/Electric)</option>
+                      <option value="Electric">Pure Electric (EV)</option>
+                    </select>
+                    {vehicleType !== "Electric" && (
+                      <input
+                        type="number"
+                        placeholder="Engine size (cc)"
+                        value={engineSize}
+                        onChange={(e) => setEngineSize(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
+                      />
+                    )}
                     <input
                       type="number"
                       placeholder="Vehicle age (years)"
@@ -683,6 +757,19 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                             step="0.01"
                           />
                         </div>
+                        <select
+                          value={item.categoryId}
+                          onChange={(e) =>
+                            updateBulkItem(item.id, "categoryId", e.target.value)
+                          }
+                          className="w-48 px-2 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
+                        >
+                          {productCategories.map((cat) => (
+                            <option key={cat.id} value={cat.id}>
+                              {cat.name}
+                            </option>
+                          ))}
+                        </select>
                         {bulkItems.length > 1 && (
                           <button
                             onClick={() => removeBulkItem(item.id)}
@@ -750,37 +837,47 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                     />
                   </div>
 
-                  {usdPrice && engineSize && vehicleAge && rate && (
+                  {usdPrice && (vehicleType === "Electric" || engineSize) && vehicleAge && rate && (
                     <div className="grid md:grid-cols-2 gap-4">
                       {[true, false].map((sadcStatus) => {
-                        const engine = parseFloat(engineSize);
+                        const engine = vehicleType === "Electric" ? 0 : parseFloat(engineSize);
                         const age = parseInt(vehicleAge);
                         const valueMWK = parseFloat(usdPrice) * rate;
 
-                        let dutyRate = sadcStatus
-                          ? engine <= 1000
-                            ? carDutyRates.sadcUnder1000cc
-                            : carDutyRates.sadcOver1000cc
-                          : engine <= 1000
-                          ? carDutyRates.nonSadcUnder1000cc
-                          : carDutyRates.nonSadcOver1000cc;
+                        let dutyRate = 0;
+                        let exciseRate = 0;
+                        let customVatRate = taxRates.vat;
+                        let carbonTax = 0;
 
-                        const agePenalty =
-                          age > 5 ? Math.min((age - 5) * 2, 15) : 0;
-                        dutyRate += agePenalty;
+                        if (vehicleType === "Electric") {
+                          dutyRate = 0;
+                          exciseRate = 0;
+                          customVatRate = 8;
+                          carbonTax = 0;
+                        } else if (vehicleType.startsWith("Hybrid")) {
+                          dutyRate = 30; // Standard customs duty for hybrids
+                          exciseRate = engine <= 1500 ? 17.5 : engine <= 2500 ? 10 : 20;
+                          carbonTax = engine * carDutyRates.carbonTaxRate * (age > 10 ? 1.5 : 1);
+                          const agePenalty = age > 5 ? Math.min((age - 5) * 2, 15) : 0;
+                          dutyRate += agePenalty;
+                        } else {
+                          dutyRate = sadcStatus
+                            ? engine <= 1000
+                              ? carDutyRates.sadcUnder1000cc
+                              : carDutyRates.sadcOver1000cc
+                            : engine <= 1000
+                            ? carDutyRates.nonSadcUnder1000cc
+                            : carDutyRates.nonSadcOver1000cc;
+                          exciseRate = engine <= 1500 ? carDutyRates.exciseUnder1500cc : carDutyRates.exciseOver1500cc;
+                          carbonTax = engine * carDutyRates.carbonTaxRate * (age > 10 ? 1.5 : 1);
+                          const agePenalty = age > 5 ? Math.min((age - 5) * 2, 15) : 0;
+                          dutyRate += agePenalty;
+                        }
 
                         const importDuty = valueMWK * (dutyRate / 100);
-                        const exciseRate =
-                          engine <= 1500
-                            ? carDutyRates.exciseUnder1500cc
-                            : carDutyRates.exciseOver1500cc;
                         const exciseTax = valueMWK * (exciseRate / 100);
-                        const carbonTax =
-                          engine *
-                          carDutyRates.carbonTaxRate *
-                          (age > 10 ? 1.5 : 1);
                         const taxableAmount = valueMWK + importDuty + exciseTax;
-                        const vat = taxableAmount * (taxRates.vat / 100);
+                        const vat = taxableAmount * (customVatRate / 100);
                         const ait = valueMWK * (taxRates.ait / 100);
                         const totalTaxes =
                           importDuty +
@@ -905,9 +1002,30 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                         </>
                       )}
 
+                      {result.type === "general" && result.importDuty !== undefined && (
+                        <>
+                          <div className="bg-blue-50 rounded-lg p-3">
+                            <p className="text-xs text-gray-600">Import Duty</p>
+                            <p className="font-semibold text-blue-600">{formatMWK(result.importDuty)}</p>
+                          </div>
+                          {result.exciseTax !== undefined && result.exciseTax > 0 && (
+                            <div className="bg-orange-50 rounded-lg p-3">
+                              <p className="text-xs text-gray-600">Excise Tax</p>
+                              <p className="font-semibold text-orange-600">{formatMWK(result.exciseTax)}</p>
+                            </div>
+                          )}
+                          {result.surcharge !== undefined && result.surcharge > 0 && (
+                            <div className="bg-pink-50 rounded-lg p-3">
+                              <p className="text-xs text-gray-600">Surcharge</p>
+                              <p className="font-semibold text-pink-600">{formatMWK(result.surcharge)}</p>
+                            </div>
+                          )}
+                        </>
+                      )}
+
                       <div className="bg-red-50 rounded-lg p-3">
                         <p className="text-xs text-gray-600">
-                          VAT ({taxRates.vat}%)
+                          VAT
                         </p>
                         <p className="font-semibold text-red-600">
                           {formatMWK(result.vat)}
@@ -991,9 +1109,10 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                       </h4>
                       <div className="grid md:grid-cols-3 gap-4 text-sm">
                         <div>
-                          <span className="text-gray-600">Engine Size:</span>
+                          <span className="text-gray-600">Type / Engine:</span>
                           <span className="ml-2 font-medium">
-                            {result.details.engineSize}cc
+                            {result.details.vehicleType}
+                            {result.details.vehicleType !== "Electric" ? ` (${result.details.engineSize}cc)` : ""}
                           </span>
                         </div>
                         <div>
@@ -1276,7 +1395,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                                     <Package className="h-4 w-4 text-blue-600" />
                                   )}
                                   <p className="font-semibold text-sm">
-                                    ${calc.usdInput.toFixed(2)}
+                                    ${calc.usdInput.toFixed(2)} {calc.categoryName ? `(${calc.categoryName})` : ""}
                                   </p>
                                 </div>
                                 <p className="text-xs text-gray-500">
