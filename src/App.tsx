@@ -189,11 +189,19 @@ export default function App() {
   }, []);
 
   const calculateGeneral = () => {
-    if (!usdPrice || !rate) return;
+    if (!rate) {
+      setError("Exchange rate is not loaded yet. Please wait or refresh the rate.");
+      return;
+    }
+
+    if (!usdPrice) {
+      setError("Please enter the item price in USD");
+      return;
+    }
 
     const usdValue = parseFloat(usdPrice);
-    if (usdValue <= 0) {
-      setError("Please enter a valid USD amount");
+    if (isNaN(usdValue) || usdValue <= 0) {
+      setError("Please enter a valid price in USD greater than 0");
       return;
     }
 
@@ -237,19 +245,39 @@ export default function App() {
   };
 
   const calculateCar = () => {
-    if (!usdPrice || !rate || (vehicleType !== "Electric" && !engineSize) || !vehicleAge) {
-      setError("Please fill in all car import fields");
+    if (!rate) {
+      setError("Exchange rate is not loaded yet. Please wait or refresh the rate.");
+      return;
+    }
+
+    if (!usdPrice) {
+      setError("Please enter the vehicle price in USD");
       return;
     }
 
     const usdValue = parseFloat(usdPrice);
-    const engine = vehicleType === "Electric" ? 0 : parseFloat(engineSize);
-    const age = parseInt(vehicleAge);
-
-    if (usdValue <= 0 || (vehicleType !== "Electric" && engine <= 0) || age < 0) {
-      setError("Please enter valid values for all fields");
+    if (isNaN(usdValue) || usdValue <= 0) {
+      setError("Please enter a valid vehicle price greater than 0");
       return;
     }
+
+    if (vehicleType !== "Electric" && (!engineSize || parseFloat(engineSize) <= 0)) {
+      setError("Please enter a valid engine size in cc (e.g. 1500)");
+      return;
+    }
+
+    if (!vehicleAge || isNaN(parseInt(vehicleAge)) || parseInt(vehicleAge) < 0) {
+      setError("Please enter a valid vehicle age in years (0 or more)");
+      return;
+    }
+
+    if (!countryOfOrigin) {
+      setError("Please select the country of origin");
+      return;
+    }
+
+    const engine = vehicleType === "Electric" ? 0 : parseFloat(engineSize);
+    const age = parseInt(vehicleAge);
 
     const valueMWK = usdValue * rate;
 
@@ -350,13 +378,16 @@ export default function App() {
   };
 
   const calculateBulk = () => {
-    if (!rate) return;
+    if (!rate) {
+      setError("Exchange rate is not loaded yet. Please wait or refresh the rate.");
+      return;
+    }
 
     const validItems = bulkItems.filter(
       (item) => item.name && item.usdPrice > 0
     );
     if (validItems.length === 0) {
-      setError("Please add at least one valid item");
+      setError("Please add at least one valid item with a name and price");
       return;
     }
 
@@ -624,7 +655,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                     </div>
                     <button
                       onClick={calculateGeneral}
-                      disabled={!usdPrice || !rate}
+                      disabled={loading}
                       className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 disabled:opacity-50 font-semibold"
                     >
                       Calculate Import Costs
@@ -709,13 +740,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
 
                   <button
                     onClick={calculateCar}
-                    disabled={
-                      !usdPrice ||
-                      !rate ||
-                      !engineSize ||
-                      !vehicleAge ||
-                      !countryOfOrigin
-                    }
+                    disabled={loading}
                     className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 rounded-lg hover:from-green-700 hover:to-emerald-700 transition-all duration-200 disabled:opacity-50 font-semibold"
                   >
                     Calculate Vehicle Import Costs
@@ -790,7 +815,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                     </button>
                     <button
                       onClick={calculateBulk}
-                      disabled={!rate}
+                      disabled={loading}
                       className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-200 disabled:opacity-50 font-semibold"
                     >
                       Calculate Bulk Import
@@ -821,13 +846,25 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                         step="0.01"
                       />
                     </div>
-                    <input
-                      type="number"
-                      placeholder="Engine size (cc)"
-                      value={engineSize}
-                      onChange={(e) => setEngineSize(e.target.value)}
+                    <select
+                      value={vehicleType}
+                      onChange={(e) => setVehicleType(e.target.value)}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
-                    />
+                    >
+                      <option value="Internal Combustion">Internal Combustion (Petrol/Diesel)</option>
+                      <option value="Hybrid (Petrol/Electric)">Hybrid (Petrol/Electric)</option>
+                      <option value="Hybrid (Diesel/Electric)">Hybrid (Diesel/Electric)</option>
+                      <option value="Electric">Pure Electric (EV)</option>
+                    </select>
+                    {vehicleType !== "Electric" && (
+                      <input
+                        type="number"
+                        placeholder="Engine size (cc)"
+                        value={engineSize}
+                        onChange={(e) => setEngineSize(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400"
+                      />
+                    )}
                     <input
                       type="number"
                       placeholder="Vehicle age (years)"
@@ -1404,7 +1441,7 @@ Landed Cost: ${result.landedCost.toLocaleString()}`;
                               </div>
                               {calc.type === "car" && calc.details && (
                                 <p className="text-xs text-gray-600 mb-1">
-                                  {calc.details.engineSize}cc,{" "}
+                                  {calc.details.vehicleType === "Electric" ? "Pure EV" : `${calc.details.engineSize}cc`},{" "}
                                   {calc.details.vehicleAge}y,{" "}
                                   {calc.details.isSADC ? "SADC" : "Non-SADC"}
                                 </p>
